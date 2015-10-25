@@ -1,0 +1,13 @@
+base
+dplyr
+lattice
+ggplot2
+caret
+nnet
+reshape2
+rpart
+rpart.plot
+RColorBrewer
+RGtk2
+rattle
+randomForest

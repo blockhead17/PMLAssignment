@@ -1,0 +1,215 @@
+---
+title: "Practical Machine Learning Assignment"
+author: "blockhead17"
+output: html_document
+---
+#Executive Summary
+The goal of this project is to use a prediction model that can determine if an exercise is being done correctly.  The data for this project are available from a team of researchers through their [website](http://groupware.les.inf.puc-rio.br/har) and are described in greater detail in a [publication](http://groupware.les.inf.puc-rio.br/har#ixzz3pcGDZtXB)^1^. This report describes the process of model building using cross validation as well as exploratory data analyses.  The characteristics of several models are presented with one model selected to use for predicting the exercise technique for 20 records in a test data set.  Appendices show detailed code for the majority of this report. 
+
+#Data Processing
+```{r global_options,echo=FALSE}
+knitr::opts_chunk$set(fig.width=5, fig.height=4, fig.path='Figs/',
+                      echo=TRUE, warning=FALSE, message=FALSE,cache=TRUE)
+
+```
+
+```{r echo=FALSE}
+#Empty the console and environment
+cat("\014")
+rm(list=ls()) 
+
+#Import raw data
+setwd("~/Documents/R Working Directory/PracticalMachineLearningProject")
+finalTest<-read.table("pml-testing.csv", sep = ",",header=TRUE)
+rawData<-read.table("pml-training.csv", sep = ",",header=TRUE)
+
+#Load the libraries to be used
+library(dplyr)
+library(caret)
+library(nnet)
+library(reshape2)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+
+#Set the seed for reproducibility
+set.seed(1)
+```
+To begin, the raw data sets were imported (Appendix 1).  After visually inspecting the data using `str(rawData)` and `finalTest`, I noted that there seemed to be a number of columns with missing data and that the test data set provided by the original researchers did not include the outcome variable of interest.  In order to build the prediction model effectively, the data would need to be split into training and test data sets.  I chose to use the random subsampling approach for cross validating, assigning 75% of the data to the `train` data frame while reserving the remainder for `test`.  By splitting the data at this point, cross validation allows us to build models using data that are completely separate from those used to check their accuracy.  This provides an optimistic estimate of accuracy, but protects us from over fitting the models.  The 20 record test set provided by the researchers is further held back until the very end, being used as a validation data set (Appendix 2).
+```{r echo=FALSE}
+inTrain <- createDataPartition(y=rawData$classe,p=0.75,list = FALSE)
+train <- rawData[inTrain,]
+test <- rawData[-inTrain,]
+```
+
+#Exploratory Data Analysis and Cleaning
+After reading the available documentation of the original study and thinking about its design, I was initially disposed to choosing a set of variables for potential predictors that essentially distilled down to the raw (not calculated) values for each user, device and location.  However, due diligence requires a more substantive look at the data to supplement an informed opinion.  I first checked to see what columns had a meaningful percentage of missing data (30%) in case some imputation might be necessary (in fact this percentage could have been much higher and yielded the same number of columns).  I then checked for near zero variance (NZV) columns and excluded columns from the data that met either the high missing or NZV criterion.  All that remained after this trimming were the variables I originally proposed above, as well as the primary outcome and other identifier variables (e.g. user, time stamps).  The identifier variables are assumed to be unimportant for the purpose of model prediction leaving a final training data set of 53 variables.
+```{r}
+checkNA <- function (v) { 
+      percentNA=sum(is.na(v))/length(v)
+      ifelse(percentNA>0.3,TRUE,FALSE) 
+}
+
+w <- sapply(train, checkNA)
+z <- nearZeroVar(train,saveMetrics = TRUE)
+
+train2 <- train[,!w & !z$nzv]
+
+train3 <- train2[,c("classe",
+                  grep("^gyros|^accel|^magnet|^roll|^pitch|^yaw|^total",
+                  names(train), value=TRUE))]
+```
+After reaching this point, having reduced the number of potential predictors to about 1/3 of its original size, I explored some corrlations in the remaining data columns (Appendix 3) and principal components analysis (Appendix 4) but decided to not reduce the data further unless needed in subsequent analyses.  Appendix 5 shows the minimum and maximum values for the remaining predictors.  We can see that the variables are a bit diverse, with many of them having both positive and negative values and the orders of magnitude in the measurements were not too far from each other.  Because this was an exercise in classifcation instead of regression, interpretability of coefficients was less of a concern, so I opted not to center and scale the values as part of the pre-processing step.
+
+#Model Building
+Three different models were fitted using the `train3` data (Appendix 6).  The first used a multinomial log-linear model to predict a nominal (factor) response variable.  The second used a regression tree approach and the third used a random forest approach.  For the multinomial log-linear model, the reference group for comparisons was set to "A" (doing the exercise correctly).  Otherwise, all three approaches used the same syntactical and analytic approach.  Fit the model in question and save to an object, then use the predict function to apply that model to our test set.  The results of this were again saved to an object that was used to generate a confusion matrix (always compared to  `test$classe`).  The most important predictors for the random forest model are showing in Appendix 7.
+```{r echo=FALSE,results="hide"}
+train3$classe <- relevel(train3$classe, ref = "A")
+fitMult <- multinom(classe ~ ., data = train3,maxit = 1000)
+# c <- summary(fitMult)$coefficients
+# z <- summary(fitMult)$coefficients/summary(fitMult)$standard.errors
+# p <- (1 - pnorm(abs(z), 0, 1)) * 2
+#summary(fitMult)
+predictMult <- predict(fitMult, test, type = "class")
+cmMult <- confusionMatrix(predictMult, test$classe)
+cmMult
+
+fitTree <- rpart(classe ~ ., data=train3, method="class")
+#summary(fitTree)
+##fancyRpartPlot(fitTree)
+predictTree <- predict(fitTree, test, type = "class")
+cmTree <- confusionMatrix(predictTree, test$classe)
+cmTree
+
+fitForest <- randomForest(classe ~., data=train3)
+#summary(fitRF)
+predictForest <- predict(fitForest, test, type = "class")
+cmForest <- confusionMatrix(predictForest,test$classe)
+cmForest
+```
+
+#Predicting Results on the Final Test Data
+The accuracy for the multinomial log-linear model was 74.1% and the regression tree approach only yielded a small improvement (74.9%).  The random forest approach, however, had an overall accuracy rate of 99.6%, making it the easy choice for use against the final validation set.  The expected out of sample (generalization) error - generated from the test data set - is 0.4%.
+```{r}
+finalPredict <- predict(fitForest, finalTest, type = "class")
+finalPredict
+```
+
+******
+\pagebreak
+
+#Appendices
+
+###About the Data
+* The study from which these data are used pertains to "quantified self movement."  In an effort to quantify how well the participants performed an exercise (barbell lifts), 6 participants accelerometers to quantify their movements while performing the exercise correctly as well as using 4 techniques that highlight typical mistakes in performing hte exercise (the _classe_ variable; _classe=A_ represents correct technique). 
+* Each participant had four sensors on his body to capture data: glove (forearm), armband (arm), lumbar belt (belt) and dumbbell.
+* Spatial data (x, y and z measurements) were collected at each time point for the accelerometer, gyroscope and magnetometer.
+* Also collected at each time point were roll, pitch and yaw to measure rotational data.
+* For each sensor, the data set included summary (calculated) statisitics: mean, variance, standard deviation, max, min, amplitude, kurtosis and skewness.
+* The data set does include time stamp information though these data are not treated as a time series.
+
+###References
+1. Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+###Appendix 1: Initialization
+```{r echo=TRUE,eval=FALSE}
+#Empty the console and environment
+cat("\014")
+rm(list=ls()) 
+
+#Import raw data
+setwd("~/Documents/R Working Directory/PracticalMachineLearningProject")
+finalTest<-read.table("pml-testing.csv", sep = ",",header=TRUE)
+rawData<-read.table("pml-training.csv", sep = ",",header=TRUE)
+
+#Load the libraries to be used
+library(dplyr)
+library(caret)
+library(nnet)
+library(reshape2)
+library(rpart)
+library(rpart.plot)
+library(RColorBrewer)
+library(rattle)
+library(randomForest)
+
+#Set the seed for reproducibility
+set.seed(1)
+```
+
+###Appendix 2: Cross Validation
+```{r echo=FALSE}
+inTrain <- createDataPartition(y=rawData$classe,p=0.75,list = FALSE)
+train <- rawData[inTrain,]
+test <- rawData[-inTrain,]
+```
+
+###Appendix 3: Correlation Analysis
+```{r eval=FALSE}
+M <- abs(cor(train3[,-1]))
+diag(M) <- 0
+M2 <- as.data.frame(which(M>0.8,arr.ind = TRUE,useNames = TRUE))
+M2$row2 <- rownames(M2)
+M2$col2 <- factor(colnames(train3[M2$col+1]))
+M2$col2 <- gsub("\\.*", "", M2$col2)
+M2 <- M2[3:4]
+```
+
+###Appendix 4: Principal Components
+```{r eval=FALSE}
+prComp <- prcomp(train3[,-1],retx=TRUE)
+summary(prComp)
+```
+
+###Appendix 5: Ranges for Numeric Predictors in Final Training Set
+```{r}
+minmax <- sapply(train3[,-1],range)
+minmax <- t(minmax)
+colnames(minmax) <- c("min","max")
+minmax
+```
+
+###Appendix 6: Three Types of Models
+
+#####Multinomial log-linear model
+```{r}
+train3$classe <- relevel(train3$classe, ref = "A")
+fitMult <- multinom(classe ~ ., data = train3,maxit = 1000)
+# c <- summary(fitMult)$coefficients
+# z <- summary(fitMult)$coefficients/summary(fitMult)$standard.errors
+# p <- (1 - pnorm(abs(z), 0, 1)) * 2
+#summary(fitMult)
+predictMult <- predict(fitMult, test, type = "class")
+cmMult <- confusionMatrix(predictMult, test$classe)
+cmMult
+```
+
+#####Regression tree
+```{r}
+fitTree <- rpart(classe ~ ., data=train3, method="class")
+#summary(fitTree)
+##fancyRpartPlot(fitTree)
+predictTree <- predict(fitTree, test, type = "class")
+cmTree <- confusionMatrix(predictTree, test$classe)
+cmTree
+```
+
+#####Random forest
+```{r}
+fitForest <- randomForest(classe ~., data=train3)
+#summary(fitRF)
+predictForest <- predict(fitForest, test, type = "class")
+cmForest <- confusionMatrix(predictForest,test$classe)
+cmForest
+```
+
+###Appendix 7: Most Important Variables from Random Forest
+```{r}
+impForest <- varImp(fitForest)
+impForest <- cbind(Variable = rownames(impForest), impForest)
+impForest <- arrange(impForest,desc(Overall))
+head(impForest,20)
+```
+
